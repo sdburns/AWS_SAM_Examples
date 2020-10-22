@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Example SAM Template showing API Gateway-SQS integration
+
+Globals:
+  Api:
+    OpenApiVersion: 3.0.1 # stops creation of default stage in Api Gateway
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+
+Resources:
+
+  # SQS Queue
+  DemoQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: DemoQueue
+
+  # Api Gateway
+  DemoApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: DemoApi
+      StageName: !Ref Environment
+      Auth:
+        ApiKeyRequired: true
+      MethodSettings:
+        - LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: false
+          ResourcePath: '/*' # allows for logging on any resource
+          HttpMethod: '*' # allows for logging on any method
+      DefinitionBody:
+        swagger: "2.0"
+        info:
+          version: "2020-08-06T15:39:24Z"
+          title: DemoQueue
+        host: "${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com"
+        basePath: !Ref Environment
+        schemes:
+        - "https"
+        x-amazon-apigateway-api-key-source: "HEADER"
+        paths:
+          "/":
+            post:
+              security:
+              - api_key: []
+              consumes:
+              - "application/json"
+              produces:
+              - "application/json"
+              responses:
+                "200":
+                  description: "200 response"
+                  schema:
+                    $ref: "#/definitions/Empty"
+              x-amazon-apigateway-integration:
+                type: "aws"
+                credentials: !GetAtt DemoApiIamRole.Arn
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:sqs:path/DemoQueue"
+                responses:
+                  default:
+                    statusCode: "200"
+                requestParameters:
+                  integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+                requestTemplates:
+                  application/json: "Action=SendMessage&MessageBody=$input.body"
+                passthroughBehavior: "never"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+        components:
+          schemas:
+            Empty:
+              title: "Empty Schema"
+              type: "object"
+        securitySchemes:
+          api_key:
+            type: "apiKey"
+            name: "x-api-key"
+            in: "header"
+
+  # IAM Role for API Gateway
+  DemoApiIamRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DemoApiIamRole
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+      Policies:
+        - PolicyName: DemoApiIamPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt DemoQueue.Arn
+
+  # Usage Plan
+  DemoUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn:
+      - DemoApi
+      - DemoApiStage
+    Properties:
+      ApiStages:
+        - ApiId: !Ref DemoApi
+          Stage: !Ref Environment
+      Quota:
+        Limit: 1000
+        Period: MONTH
+      Throttle:
+        BurstLimit: 20
+        RateLimit: 10
+      UsagePlanName: DemoUsagePlan
+  
+  # ApiKey
+  DemoApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    DependsOn:
+      - DemoApi
+    Properties:
+      Name: DemoApiKey
+      Enabled: true
+  
+  # UsagePlanKey
+  DemoUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref DemoApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref DemoUsagePlan
+
+Outputs:
+  DemoApi:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${DemoApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/"
+  DemoQueue:
+    Description: "ARN for SQS queue"
+    Value: !GetAtt DemoQueue.Arn
+  DemoApiIamRole:
+    Description: "ARN for API Gateway IAM Role"
+    Value: !GetAtt DemoApiIamRole.Arn
