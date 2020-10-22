@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM template showing how to implement simple Basic Authentication in a Lambda authorizer with API Gateway.
+
+Globals:
+  Function:
+    Timeout: 10
+  Api:
+    OpenApiVersion: 3.0.1 # stops creation of default stage in Api Gateway
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+
+Resources:
+
+  # API Gateway
+  AuthorizerApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: AuthorizerApi
+      StageName: !Ref Environment
+      MethodSettings:
+        - LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: false
+          ResourcePath: '/*' # allows for logging on any resource
+          HttpMethod: '*' # allows for logging on any method
+      Auth:
+        DefaultAuthorizer: LambdaRequestAuthorizer
+        Authorizers:
+          LambdaRequestAuthorizer:
+            FunctionPayloadType: REQUEST
+            FunctionArn: !GetAtt AuthFunction.Arn
+            Identity:
+              Headers:
+                - Authorization
+              ReauthorizeEvery: 100
+      GatewayResponses:
+        UNAUTHORIZED:
+          StatusCode: 401
+          ResponseParameters:
+            Headers:
+              WWW-Authenticate: "'Basic'" 
+    
+  # Lambda Authorizer
+  AuthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AuthFunction
+      CodeUri: lambda_authorizer/
+      Handler: app.lambda_handler
+      Runtime: python3.8
+  
+  # Lambda - to test Authorizer has worked successfully
+  AuthTestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: AuthTestFunction
+      CodeUri: authorizer_test
+      Handler: app.lambda_handler
+      Runtime: python3.8
+      Events:
+        LeftClickTestEvent:
+          Type: Api
+          Properties:
+            RestApiId: !Ref AuthorizerApi
+            Path: /authorizer/test
+            Method: GET
+
+Outputs:
+  AuthorizerApi:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${AuthorizerApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/"
+  AuthFunction:
+    Description: "ARN for Lambda authorizer function"
+    Value: !GetAtt AuthFunction.Arn
+  AuthTestFunction:
+    Description: "ARN for Lambda function to test authorizer"
+    Value: !GetAtt AuthTestFunction.Arn
